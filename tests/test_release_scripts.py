@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import re
 import subprocess
 import textwrap
 
@@ -360,3 +361,33 @@ def test_release_asset_set_resumes_partial_upload_then_refuses_complete_set(tmp_
         assert (release / path.name).read_text() == f"rebuilt:{path.name}"
     assert duplicate.returncode != 0
     assert "already have the complete linux-x86_64 release" in duplicate.stdout
+
+
+def test_the_linux_release_feeds_every_platform_it_declares_complete():
+    """The two lists that have to agree, in two places far apart in the script.
+
+    `upload_release_asset_set` is told which feed platforms make the release
+    complete, and `publish_feed` writes the entries. If they drift, a re-run
+    either refuses a release that is genuinely missing a format or accepts one
+    that is, and the failure only shows up on the next release.
+    """
+    # Explicit encoding: the script is full of emoji, and the default depends
+    # on the locale the suite happens to run under.
+    script = (DESKTOP / "scripts" / "release-linux.sh").read_text(encoding="utf-8")
+
+    declared = re.search(r'"(linux-\$FEED_ARCH(?:,[^"]+)+)"', script)
+    assert declared, "release-linux.sh no longer declares a feed platform list"
+    complete = set(declared.group(1).split(","))
+
+    written = set(re.findall(r'--platform "([^="]+)=', script))
+
+    assert complete == written, (
+        f"declared complete {sorted(complete)} but the feed writes {sorted(written)}"
+    )
+    # Each package format the release ships, so dropping one is a failure here
+    # rather than an update that installs the wrong thing.
+    assert complete == {
+        "linux-$FEED_ARCH",
+        "linux-$FEED_ARCH-deb",
+        "linux-$FEED_ARCH-rpm",
+    }

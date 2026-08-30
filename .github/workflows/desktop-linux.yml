@@ -1,6 +1,6 @@
 name: desktop-linux
 
-# The Linux half of a desktop release: the .deb and the AppImage for both
+# The Linux half of a desktop release: the .deb, the .rpm and the AppImage for both
 # architectures, uploaded into the vX.Y.Z release and merged into the update
 # feed. The macOS half stays a manual run of desktop/scripts/release.sh, because
 # it needs the Developer ID certificate and the notarization keys that live on
@@ -66,7 +66,14 @@ jobs:
           for pair in "x86_64:ubuntu-22.04" "aarch64:ubuntu-22.04-arm"; do
             arch="${pair%%:*}"
             runner="${pair##*:}"
-            if printf '%s\n' "$assets" | grep -Fqx "nurb_$arch.deb"; then
+            # Every format, not just the .deb: a release made before the .rpm
+            # existed carries the other two, and skipping on the .deb alone
+            # would leave it without one forever.
+            have=1
+            for asset in "nurb_$arch.deb" "nurb_$arch.rpm" "nurb-$arch.AppImage"; do
+              printf '%s\n' "$assets" | grep -Fqx "$asset" || have=0
+            done
+            if [ "$have" = 1 ]; then
               echo "v$version already carries the $arch packages."
               continue
             fi
