@@ -22,6 +22,7 @@ type Props = {
   signingIn: string | null;
   onSignIn: (id: string) => Promise<boolean>;
   onMoreAgents: () => void;
+  onInstallAi: () => void;
   onClose: () => void;
 };
 
@@ -35,6 +36,7 @@ export default function Settings({
   signingIn,
   onSignIn,
   onMoreAgents,
+  onInstallAi,
   onClose,
 }: Props) {
   const [sound, setSound] = useState(soundEnabled);
@@ -136,6 +138,7 @@ export default function Settings({
               </button>
             </>
           )}
+          <button className="settings-agent-more" onClick={onInstallAi}>install or repair AI tools (internet required)</button>
           {signInError && <p className="settings-agent-error" role="alert">{signInError}</p>}
         </div>
       </div>

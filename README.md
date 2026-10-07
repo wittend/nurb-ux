@@ -42,7 +42,7 @@ One line, installs everything: uv if you don't have it, nurb, and the agent skil
 
 ## Running on Debian and Ubuntu
 
-These instructions run the code from **wittend/nurb-ux**. Use a 64-bit Debian or Ubuntu system; Debian 12/13 and Ubuntu 22.04/24.04 provide the WebKitGTK 4.1 packages needed by the desktop app. Linux release builds target x86_64 (amd64) and aarch64 (arm64). A desktop session is needed for the app, and a browser with WebGL is needed for the browser viewer. Initial installation needs internet access; AI conversations also need the selected provider's account or API credentials and internet access. Modelling, checks, and exports can run locally after installation.
+These instructions run the code from **wittend/nurb-ux**. Use a 64-bit Debian or Ubuntu system. Source builds need the WebKitGTK 4.1 packages available in Debian 12/13 and Ubuntu 22.04/24.04. Packaged amd64 (x86_64) and arm64 (aarch64) builds both use Ubuntu 22.04 as their build baseline (glibc 2.35), making Debian 12/13 and Ubuntu 22.04/24.04 candidates. These are build baselines, not verified compatibility claims, and apply to every package format. A desktop session is needed for the app, and a browser with WebGL is needed for the browser viewer. Initial installation needs internet access; AI conversations also need the selected provider's account or API credentials and internet access. Modelling, checks, and exports can run locally after installation.
 
 ### Run the command line and browser viewer from this fork
 
@@ -113,9 +113,9 @@ When a `.deb` is available on [this fork's Releases page](https://github.com/wit
 sudo apt install ./nurb_x86_64.deb
 ```
 
-Use `./nurb_aarch64.deb` for an arm64 release, or substitute the actual downloaded filename if it includes a version. APT installs the package's declared runtime dependencies, including bubblewrap, curl, xz-utils, and the desktop libraries. Launch **nurb** from your applications menu or run `nurb` in a terminal. The packaged desktop app provisions its Python, Node, and CAD environment on first launch; it does not require the Rust or Node development tools above. If a CLI installation also provides `nurb`, use the applications menu to launch the desktop app.
+Use `./nurb_aarch64.deb` for an arm64 release, or substitute the actual downloaded filename if it includes a version. APT installs the package's declared runtime dependencies, including bubblewrap, curl, xz-utils, and the desktop libraries. Launch **nurb** from your applications menu or run `nurb` in a terminal. The Linux desktop package includes Python 3.13 and the CAD dependency wheels for its architecture. First launch installs the CAD environment locally without downloading Python or CAD dependencies. Optional AI setup downloads Node and adapters; it does not require the Rust or Node development tools above. If a CLI installation also provides `nurb`, use the applications menu to launch the desktop app.
 
-The current desktop updater is configured to read the upstream release feed. Until that feed is changed for this fork, install fork updates manually from this fork's Releases page rather than accepting an in-app update.
+Automatic updates are disabled for this fork. Install fork updates manually from its Releases page or workflow artifacts.
 
 ### Linux troubleshooting
 
@@ -255,7 +255,7 @@ Copyright 2026 Ordinary Systems LLC.
 
 ### Third-party notices
 
-nurb uses **Open CASCADE Technology** (OCCT) for all B-rep geometry, reached through [build123d](https://github.com/gumyr/build123d) (Apache-2.0) and the `OCP` bindings (Apache-2.0). OCCT is licensed under [LGPL-2.1 with an additional exception](https://dev.opencascade.org/resources/licensing). nurb does not redistribute OCCT; it is installed as a dependency and dynamically linked. Bundling nurb into a single-file distribution that embeds OCCT would require shipping the OCCT license and keeping the library replaceable, per LGPL.
+nurb uses **Open CASCADE Technology** (OCCT) for all B-rep geometry, reached through [build123d](https://github.com/gumyr/build123d) (Apache-2.0) and the `OCP` bindings (Apache-2.0). OCCT is licensed under [LGPL-2.1 with an additional exception](https://dev.opencascade.org/resources/licensing). Linux desktop packages redistribute OCCT in the CAD wheel bundle and install its dynamically linked libraries into the app data directory. The OCCT LGPL license and exception ship in the app; runtime and wheel licenses ship with the bundle. See [desktop packaging](desktop/README.md) for source references and rebuilding instructions.
 
 nurb **does** redistribute [three.js](https://threejs.org) r169 (MIT), vendored so the viewer works offline, with its `LICENSE` beside it. Same for the viewer's UI font, [JetBrains Mono](https://www.jetbrains.com/lp/mono/) (SIL OFL 1.1), vendored with its `OFL.txt`.
 

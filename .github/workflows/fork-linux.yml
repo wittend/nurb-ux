@@ -1,0 +1,78 @@
+name: Fork Linux packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/bundle-linux-runtimes]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: astral-sh/setup-uv@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libdbus-1-dev libxdo-dev patchelf pkg-config \
+            xdg-utils bubblewrap build-essential curl xz-utils
+      - run: npm ci
+        working-directory: desktop
+      - name: Frontend tests
+        working-directory: desktop
+        run: npm test
+      - name: Stage and verify offline CAD payload
+        working-directory: desktop
+        run: npm run stage
+      - name: Native runtime tests
+        working-directory: desktop/src-tauri
+        run: |
+          cargo test
+          cp "binaries/nurb-uv-$(uname -m)-unknown-linux-gnu" target/debug/nurb-uv
+          NURB_BUNDLE_TEST_RESOURCES="$PWD/resources" cargo test staged_linux_payload_provisions_cad_offline -- --ignored
+      - name: Build architecture-specific packages
+        working-directory: desktop
+        run: npm run tauri build -- --bundles deb,rpm,appimage --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - name: Verify packaged offline CAD install
+        working-directory: desktop/src-tauri
+        run: |
+          package_test="$(mktemp -d)"
+          trap 'rm -rf "$package_test"' EXIT
+          deb="$(find target/release/bundle/deb -name '*.deb' -print -quit)"
+          dpkg-deb -x "$deb" "$package_test"
+          cp "$package_test/usr/bin/nurb-uv" target/debug/nurb-uv
+          NURB_BUNDLE_TEST_RESOURCES="$package_test/usr/lib/nurb/resources" cargo test staged_linux_payload_provisions_cad_offline -- --ignored
+      - name: Save packages and dependency manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: nurb-ux-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/rpm/*.rpm
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/resources/python-bundle.json
+            desktop/src-tauri/resources/python-notices/**
+            desktop/src-tauri/resources/python-sources/**

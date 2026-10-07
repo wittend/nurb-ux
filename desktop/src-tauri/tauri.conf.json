@@ -36,9 +36,7 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQyOTYyNkI5RTg3NkFFRDQKUldUVXJuYm91U2FXUWdNWGQvT1VwY2FQb3lhclFzWDZTRzhRa3k3NXRJaThJbVEzbWNmOVowbEQK",
-      "endpoints": [
-        "https://github.com/Shpigford/nurb/releases/download/desktop-latest/latest.json"
-      ]
+      "endpoints": []
     }
   },
   "bundle": {
@@ -46,7 +44,7 @@
     "targets": ["app", "dmg", "deb", "rpm", "appimage"],
     "createUpdaterArtifacts": true,
     "externalBin": ["binaries/nurb-uv"],
-    "resources": ["resources/*"],
+    "resources": ["resources/**/*"],
     "linux": {
       "deb": {
         "depends": ["bubblewrap", "curl", "xz-utils"]

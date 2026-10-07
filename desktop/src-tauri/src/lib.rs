@@ -599,6 +599,8 @@ pub fn run() {
             agents::agent_login,
             provision::provision_status,
             provision::provision,
+            provision::provision_chat_status,
+            provision::provision_chat,
             provision::about_info
         ])
         .build(tauri::generate_context!())

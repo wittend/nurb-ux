@@ -1,7 +1,6 @@
-//! First-launch provisioning: the bundled uv sidecar installs a managed
-//! Python, syncs the bundled hash-pinned lock, and installs the bundled nurb
-//! wheel into a venv under app data; a downloaded Node LTS plus `npm ci`
-//! from the bundled adapter lock gives chat a runtime. Everything
+//! First-launch provisioning: Linux extracts bundled Python and installs the
+//! hash-pinned CAD wheels offline. macOS retains managed Python downloads.
+//! Optional chat provisioning downloads Node LTS and runs `npm ci`. Everything
 //! streams phase events to the setup screen, and every component is checked
 //! and redone independently so an app update or a half-finished install
 //! repairs itself instead of wedging.
@@ -89,6 +88,8 @@ struct Stamp {
     node: String,
     adapters: Vec<String>,
     adapter_lock: String,
+    #[serde(default)]
+    python_bundle: String,
 }
 
 pub struct Provisioner {
@@ -126,12 +127,91 @@ struct Resources {
     adapter_package: PathBuf,
     adapter_lock: PathBuf,
     adapter_lock_hash: String,
+    python_bundle: Option<PythonBundle>,
+}
+
+#[derive(serde::Deserialize)]
+struct BundleWheel {
+    filename: String,
+    sha256: String,
+}
+
+#[derive(serde::Deserialize)]
+struct BundleManifest {
+    schema: u32,
+    platform: String,
+    architecture: String,
+    python_version: String,
+    archive_sha256: String,
+    requirements_sha256: String,
+    wheels: Vec<BundleWheel>,
+}
+
+struct PythonBundle {
+    dir: PathBuf,
+    manifest: BundleManifest,
+    identity: String,
+}
+
+fn load_python_bundle(dir: &std::path::Path, lock_hash: &str) -> Result<PythonBundle, String> {
+    let path = dir.join("python-bundle.json");
+    let identity = file_hash(&path, "Python manifest")?;
+    let manifest: BundleManifest =
+        serde_json::from_slice(&std::fs::read(&path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("invalid Python bundle manifest: {e}"))?;
+    let architecture = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    if manifest.schema != 1
+        || manifest.platform != "linux"
+        || manifest.architecture != architecture
+        || !manifest.python_version.starts_with("3.13.")
+        || manifest.requirements_sha256 != lock_hash
+        || manifest.wheels.is_empty()
+    {
+        return Err("the bundled Python/CAD payload does not match this host or dependency lock".into());
+    }
+    if file_hash(&dir.join("python-runtime.tar.gz"), "Python runtime")? != manifest.archive_sha256 {
+        return Err("the bundled Python runtime did not match its checksum".into());
+    }
+    for wheel in &manifest.wheels {
+        if !valid_wheel_filename(&wheel.filename) {
+            return Err("invalid wheel filename in Python bundle manifest".into());
+        }
+        if file_hash(&dir.join("wheelhouse").join(&wheel.filename), "CAD wheel")? != wheel.sha256 {
+            return Err(format!("bundled CAD wheel {} did not match its checksum", wheel.filename));
+        }
+    }
+    Ok(PythonBundle {
+        dir: dir.to_path_buf(),
+        manifest,
+        identity,
+    })
+}
+
+fn valid_wheel_filename(name: &str) -> bool {
+    !name.is_empty()
+        && name.ends_with(".whl")
+        && !name.contains('/')
+        && !name.contains('\\')
+        && std::path::Path::new(name).components().count() == 1
 }
 
 fn file_hash(path: &std::path::Path, what: &str) -> Result<String, String> {
-    let bytes = std::fs::read(path)
+    let mut file = std::fs::File::open(path)
         .map_err(|e| format!("bundled {what} missing at {}: {e}", path.display()))?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = std::io::Read::read(&mut file, &mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 fn resources(app: &tauri::AppHandle) -> Result<Resources, String> {
@@ -156,7 +236,13 @@ fn resources(app: &tauri::AppHandle) -> Result<Resources, String> {
         })
         .ok_or_else(|| format!("no nurb wheel bundled in {}", dir.display()))?;
     let wheel_hash = file_hash(&wheel, "wheel")?;
+    let python_bundle = if cfg!(target_os = "linux") {
+        Some(load_python_bundle(&dir, &lock_hash)?)
+    } else {
+        None
+    };
     Ok(Resources {
+        python_bundle,
         wheel,
         wheel_hash,
         lock,
@@ -184,8 +270,9 @@ fn write_stamp(paths: &Paths, stamp: &Stamp) -> Result<(), String> {
 fn parts_ok(paths: &Paths, res: &Resources, stamp: &Stamp) -> bool {
     stamp.lock == res.lock_hash
         && stamp.wheel == res.wheel_hash
+        && stamp.python_bundle == res.python_bundle.as_ref().map(|b| b.identity.as_str()).unwrap_or("")
         && Command::new(paths.venv_python())
-            .args(["-c", "import nurb"])
+            .args(["-c", "import build123d, nurb"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -468,7 +555,7 @@ pub async fn provision_status(app: tauri::AppHandle) -> Result<bool, String> {
         };
         let res = resources(&app)?;
         let stamp = read_stamp(paths);
-        Ok(parts_ok(paths, &res, &stamp) && chat_ok(paths, &res, &stamp))
+        Ok(parts_ok(paths, &res, &stamp) && (res.python_bundle.is_some() || chat_ok(paths, &res, &stamp)))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -490,6 +577,38 @@ pub async fn provision(
     .map_err(|e| e.to_string())?
 }
 
+/// AI runtimes are optional downloads; CAD setup must complete without them.
+#[tauri::command]
+pub async fn provision_chat_status(app: tauri::AppHandle) -> Result<bool, String> {
+    let launcher = app.state::<Launcher>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(paths) = launcher.paths() else { return Ok(true); };
+        let res = resources(&app)?;
+        Ok(chat_ok(paths, &res, &read_stamp(paths)))
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn provision_chat(app: tauri::AppHandle, on_event: Channel<ProvisionEvent>) -> Result<(), String> {
+    let launcher = app.state::<Launcher>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(paths) = launcher.paths() else { return Ok(()); };
+        let provisioner = app.state::<Provisioner>();
+        let _guard = provisioner.run.lock().unwrap();
+        let res = resources(&app)?;
+        std::fs::create_dir_all(paths.data()).map_err(|e| e.to_string())?;
+        let mut stamp = read_stamp(paths);
+        if !chat_ok(paths, &res, &stamp) {
+            install_chat(&provisioner, paths, &res, &on_event)?;
+            stamp.node = NODE_VERSION.into();
+            stamp.adapters = adapter_pins();
+            stamp.adapter_lock = res.adapter_lock_hash.clone();
+            write_stamp(paths, &stamp)?;
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
 fn run(
     app: &tauri::AppHandle,
     paths: &Paths,
@@ -504,10 +623,11 @@ fn run(
         provision_parts(&provisioner, paths, &res, channel)?;
         stamp.lock = res.lock_hash.clone();
         stamp.wheel = res.wheel_hash.clone();
+        stamp.python_bundle = res.python_bundle.as_ref().map(|b| b.identity.clone()).unwrap_or_default();
         write_stamp(paths, &stamp)?;
     }
-    if !chat_ok(paths, &res, &stamp) {
-        provision_chat(&provisioner, paths, &res, channel)?;
+    if res.python_bundle.is_none() && !chat_ok(paths, &res, &stamp) {
+        install_chat(&provisioner, paths, &res, channel)?;
         stamp.node = NODE_VERSION.into();
         stamp.adapters = adapter_pins();
         stamp.adapter_lock = res.adapter_lock_hash.clone();
@@ -536,9 +656,26 @@ fn provision_parts(
     channel: &Channel<ProvisionEvent>,
 ) -> Result<(), String> {
     stage(channel, "python");
-    let mut install = uv(paths)?;
-    install.args(["python", "install", PYTHON_VERSION]);
-    run_step(provisioner, channel, install, "the Python download")?;
+    if let Some(bundle) = &res.python_bundle {
+        if paths.bundled_python_dir().exists() {
+            std::fs::remove_dir_all(paths.bundled_python_dir())
+                .map_err(|e| format!("could not clear bundled Python: {e}"))?;
+        }
+        std::fs::create_dir_all(paths.bundled_python_dir()).map_err(|e| e.to_string())?;
+        let mut extract = Command::new("/usr/bin/tar");
+        extract.arg("-xzf").arg(bundle.dir.join("python-runtime.tar.gz"))
+            .arg("-C").arg(paths.bundled_python_dir())
+            .args(["--strip-components", "1", "--no-same-owner"]);
+        run_step(provisioner, channel, extract, "the bundled Python unpack")?;
+        let mut python = Command::new(paths.bundled_python());
+        python.args(["--version"]);
+        probe_version(python, paths.data(), &bundle.manifest.python_version, HEALTH_TIMEOUT)
+            .map_err(|e| format!("the bundled Python check failed: {e}"))?;
+    } else {
+        let mut install = uv(paths)?;
+        install.args(["python", "install", PYTHON_VERSION]);
+        run_step(provisioner, channel, install, "the Python download")?;
+    }
 
     // Always rebuilt from scratch: a stale or half-installed venv repairs by
     // deletion, never by patching.
@@ -549,7 +686,12 @@ fn provision_parts(
     let mut venv = uv(paths)?;
     venv.arg("venv")
         .arg(paths.venv())
-        .args(["--python", PYTHON_VERSION, "--managed-python"]);
+        .arg("--python");
+    if res.python_bundle.is_some() {
+        venv.arg(paths.bundled_python()).args(["--offline", "--no-python-downloads"]);
+    } else {
+        venv.args([PYTHON_VERSION, "--managed-python"]);
+    }
     run_step(provisioner, channel, venv, "the environment setup")?;
 
     stage(channel, "deps");
@@ -557,6 +699,10 @@ fn provision_parts(
     sync.args(["pip", "sync", "--python"])
         .arg(paths.venv_python())
         .arg(&res.lock);
+    if let Some(bundle) = &res.python_bundle {
+        sync.args(["--offline", "--no-index", "--require-hashes", "--find-links"])
+            .arg(bundle.dir.join("wheelhouse"));
+    }
     run_step(provisioner, channel, sync, "the CAD engine download")?;
 
     let mut wheel = uv(paths)?;
@@ -564,6 +710,9 @@ fn provision_parts(
         .args(["pip", "install", "--no-deps", "--python"])
         .arg(paths.venv_python())
         .arg(&res.wheel);
+    if res.python_bundle.is_some() {
+        wheel.args(["--offline", "--no-index"]);
+    }
     run_step(provisioner, channel, wheel, "the nurb install")?;
 
     stage(channel, "warmup");
@@ -578,7 +727,7 @@ fn provision_parts(
     Ok(())
 }
 
-fn provision_chat(
+fn install_chat(
     provisioner: &Provisioner,
     paths: &Paths,
     res: &Resources,
@@ -753,6 +902,88 @@ mod tests {
         wheel_version, NODE_SHA256, NPM_CI_ARGS, PROBE_ID,
     };
     use crate::env::{Paths, NODE_VERSION};
+
+    /// Exercise the same extraction and uv commands used by packaged Linux
+    /// startup, with a staged payload and an empty app-data/cache directory.
+    #[test]
+    #[ignore = "requires a native staged Python/CAD payload and uv sidecar"]
+    fn staged_linux_payload_provisions_cad_offline() {
+        let dir = std::path::PathBuf::from(
+            std::env::var_os("NURB_BUNDLE_TEST_RESOURCES")
+                .expect("set NURB_BUNDLE_TEST_RESOURCES to staged Linux resources"),
+        );
+        let lock = dir.join("requirements.lock");
+        let lock_hash = file_hash(&lock, "lock").unwrap();
+        let wheel = std::fs::read_dir(&dir).unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .find(|path| path.file_name().and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("nurb-") && name.ends_with(".whl")))
+            .expect("staged nurb wheel");
+        let res = super::Resources {
+            wheel_hash: file_hash(&wheel, "wheel").unwrap(), wheel,
+            python_bundle: Some(super::load_python_bundle(&dir, &lock_hash).unwrap()),
+            lock, lock_hash,
+            adapter_package: dir.join("adapter-package.json"),
+            adapter_lock: dir.join("adapter-package-lock.json"),
+            adapter_lock_hash: String::new(),
+        };
+        let data = std::env::temp_dir().join(format!("nurb-real-offline-{}", std::process::id()));
+        let paths = Paths::new(data.clone());
+        if data.exists() { std::fs::remove_dir_all(&data).unwrap(); }
+        std::fs::create_dir_all(&data).unwrap();
+        let channel = tauri::ipc::Channel::new(|_| Ok(()));
+        let result = super::provision_parts(&super::Provisioner::new(), &paths, &res, &channel);
+        let mut stamp = super::Stamp::default();
+        stamp.lock = res.lock_hash.clone();
+        stamp.wheel = res.wheel_hash.clone();
+        stamp.python_bundle = res.python_bundle.as_ref().unwrap().identity.clone();
+        let smoke = if result.is_ok() {
+            Command::new(paths.venv_python()).args(["-c",
+                "from build123d import Box; import nurb; assert abs(Box(1, 2, 3).volume - 6) < 1e-6"])
+                .status().unwrap().success()
+        } else { false };
+        let healthy = result.is_ok() && super::parts_ok(&paths, &res, &stamp);
+        let no_ai = !paths.node_dir().exists() && !paths.adapters().exists();
+        std::fs::remove_dir_all(data).unwrap();
+        result.expect("production CAD provisioning must succeed offline");
+        assert!(smoke && healthy && no_ai);
+    }
+
+    #[test]
+    fn bundle_manifest_rejects_corruption_and_host_mismatch() {
+        let dir = std::env::temp_dir().join(format!("nurb-bundle-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("wheelhouse")).unwrap();
+        let archive = dir.join("python-runtime.tar.gz");
+        let wheel = dir.join("wheelhouse/nurb-1.0-py3-none-any.whl");
+        std::fs::write(&archive, b"runtime").unwrap();
+        std::fs::write(&wheel, b"wheel").unwrap();
+        let architecture = match std::env::consts::ARCH {
+            "x86_64" => "amd64", "aarch64" => "arm64", other => other,
+        };
+        let mut manifest = serde_json::json!({
+            "schema": 1, "platform": "linux", "architecture": architecture,
+            "python_version": "3.13.12", "requirements_sha256": "lock",
+            "archive_sha256": file_hash(&archive, "runtime").unwrap(),
+            "wheels": [{"filename": "nurb-1.0-py3-none-any.whl", "sha256": file_hash(&wheel, "wheel").unwrap()}]
+        });
+        let write = |manifest: &serde_json::Value| {
+            std::fs::write(dir.join("python-bundle.json"), serde_json::to_vec(manifest).unwrap()).unwrap();
+        };
+        write(&manifest);
+        assert!(super::load_python_bundle(&dir, "lock").is_ok());
+        assert!(super::load_python_bundle(&dir, "changed-lock").is_err());
+        std::fs::write(&wheel, b"corrupt").unwrap();
+        assert!(super::load_python_bundle(&dir, "lock").is_err());
+        std::fs::write(&wheel, b"wheel").unwrap();
+        manifest["architecture"] = serde_json::json!("unsupported");
+        write(&manifest);
+        assert!(super::load_python_bundle(&dir, "lock").is_err());
+        manifest["architecture"] = serde_json::json!(architecture);
+        manifest["wheels"][0]["filename"] = serde_json::json!("../escape.whl");
+        write(&manifest);
+        assert!(super::load_python_bundle(&dir, "lock").is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn every_supported_host_has_a_pinned_node_checksum() {
