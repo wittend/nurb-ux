@@ -28,6 +28,8 @@ nurb turns the AI you already pay for into a CAD partner for 3D printing. You de
 
 ## Install
 
+For Debian and Ubuntu users of this fork, follow [Running on Debian and Ubuntu](#running-on-debian-and-ubuntu) below. The Mac downloads and PyPI installer in this section install the upstream distribution.
+
 The easiest way in is the Mac app. Download it for [**Apple silicon**](https://github.com/Shpigford/nurb/releases/latest/download/nurb.dmg) or [**Intel Macs**](https://github.com/Shpigford/nurb/releases/latest/download/nurb-intel.dmg). Your projects, your AI, and the live viewer in one window; it sets everything up the first time you open it and updates itself.
 
 For the command line:
@@ -37,6 +39,90 @@ curl -fsSL https://nurb.dev/install.sh | sh
 ```
 
 One line, installs everything: uv if you don't have it, nurb, and the agent skill. Prefer your own package manager? `uv tool install nurb` (or `pip install nurb`) does the first half, and `npx skills add shpigford/nurb --skill nurb` teaches whatever AI harnesses you have. Later, `nurb update` upgrades nurb and the installed skill together.
+
+## Running on Debian and Ubuntu
+
+These instructions run the code from **wittend/nurb-ux**. Use a 64-bit Debian or Ubuntu system; Debian 12/13 and Ubuntu 22.04/24.04 provide the WebKitGTK 4.1 packages needed by the desktop app. Linux release builds target x86_64 (amd64) and aarch64 (arm64). A desktop session is needed for the app, and a browser with WebGL is needed for the browser viewer. Initial installation needs internet access; AI conversations also need the selected provider's account or API credentials and internet access. Modelling, checks, and exports can run locally after installation.
+
+### Run the command line and browser viewer from this fork
+
+You need Git, curl, a browser, and Python 3.13 or newer. The commands below use [uv](https://docs.astral.sh/uv/getting-started/installation/) to install an isolated copy of this fork and download Python 3.13, so you do not need to replace your distribution's system Python. Node and Rust are only needed if you also build the desktop app.
+
+```bash
+sudo apt update
+sudo apt install git curl ca-certificates libstdc++6
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+git clone https://github.com/wittend/nurb-ux.git
+cd nurb-ux
+uv tool install --python 3.13 .
+nurb --help
+```
+
+If another nurb installation is already managed by uv, use `uv tool install --force --python 3.13 .` to replace it with this checkout. The CAD dependencies install with the package; you do not need to compile Open CASCADE yourself.
+
+Create your parts in a separate directory. This example creates a starter part, builds and checks it, then opens the live viewer:
+
+```bash
+mkdir -p ~/nurb-projects/first-part
+cd ~/nurb-projects/first-part
+nurb new bracket
+nurb build bracket
+nurb check bracket
+nurb dev --open
+```
+
+Keep that terminal running while you work. Open the URL printed by `nurb dev` if the browser does not open automatically; the server starts at `http://localhost:7373` and chooses another port if that one is busy. Edit `parts/bracket.py` yourself or with your AI coding assistant, save it, and the viewer rebuilds the part. Press Ctrl+C in the terminal to stop the server. On later visits, return to the same project directory and run `nurb dev --open` again.
+
+To export the part, run this in a second terminal from the same project directory:
+
+```bash
+nurb export bracket --formats 3mf stl step
+```
+
+The files appear in `build/`. Open the 3MF in your slicer to prepare the print. OrcaSlicer or Bambu Studio is optional for modelling and export, but must be installed to use nurb's slicing and print-time estimates. `nurb launcher` creates a Linux `viewer.desktop` launcher; your desktop environment may ask you to allow launching it.
+
+To update this installed copy from the fork, return to your `nurb-ux` source directory, run `git pull --ff-only`, and repeat `uv tool install --force --python 3.13 .`. The upstream `nurb update` command and `nurb.dev/install.sh` install the upstream PyPI package rather than this fork.
+
+### Run the desktop app from source
+
+For the project rail, AI chat, settings, and viewer in one window, install the [Tauri Linux build prerequisites](https://v2.tauri.app/start/prerequisites/#linux), plus bubblewrap for the agent sandbox:
+
+```bash
+sudo apt install build-essential libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev librsvg2-dev libssl-dev libdbus-1-dev \
+  libxdo-dev pkg-config patchelf xdg-utils bubblewrap curl xz-utils
+```
+
+Install Node.js 22 or newer with npm from [nodejs.org](https://nodejs.org/en/download), and the stable Rust toolchain using [rustup](https://rustup.rs/). Keep uv on your PATH as shown above. Confirm `node --version`, `npm --version`, `rustc --version`, and `uv --version` work, then run these commands from your cloned `nurb-ux` directory:
+
+```bash
+uv sync --locked
+cd desktop
+npm ci
+npm run tauri dev
+```
+
+The first launch stages the required resources and compiles the Rust app, so it takes longer than later launches. Leave the terminal running while using this source build. Create or open a project in the app, choose an AI agent and complete its sign-in, then describe the part you want. Existing projects are directories containing `parts/`.
+
+### Install a packaged desktop build
+
+When a `.deb` is available on [this fork's Releases page](https://github.com/wittend/nurb-ux/releases), choose the package matching your architecture: `dpkg --print-architecture` reports `amd64` for the `x86_64` release or `arm64` for the `aarch64` release. Download it, open a terminal in the download directory, and install that specific file, for example:
+
+```bash
+sudo apt install ./nurb_x86_64.deb
+```
+
+Use `./nurb_aarch64.deb` for an arm64 release, or substitute the actual downloaded filename if it includes a version. APT installs the package's declared runtime dependencies, including bubblewrap, curl, xz-utils, and the desktop libraries. Launch **nurb** from your applications menu or run `nurb` in a terminal. The packaged desktop app provisions its Python, Node, and CAD environment on first launch; it does not require the Rust or Node development tools above. If a CLI installation also provides `nurb`, use the applications menu to launch the desktop app.
+
+The current desktop updater is configured to read the upstream release feed. Until that feed is changed for this fork, install fork updates manually from this fork's Releases page rather than accepting an in-app update.
+
+### Linux troubleshooting
+
+- **`nurb` or `uv` is not found:** reopen your terminal or run `export PATH="$HOME/.local/bin:$PATH"`.
+- **APT cannot find `libwebkit2gtk-4.1-dev`:** check your distribution version and configured package repositories. This app uses WebKitGTK 4.1; the older 4.0 package does not substitute for it.
+- **An AI agent cannot start its sandbox:** confirm bubblewrap is installed and your system permits unprivileged user namespaces. Some Ubuntu security policies restrict them; check the reported error with your administrator rather than disabling system protections globally.
+- **You only need the viewer:** use the command-line installation and `nurb dev --open`; that path does not require the Tauri development libraries.
 
 ## Which model should you use?
 
@@ -54,7 +140,7 @@ Open the app (or your agent in a terminal) and talk:
 
 The AI does the rest: reads the design doctrine, creates the project, models the part, runs the printability checks, and opens the live viewer. When it looks right: drag the sliders if you want, click `3mf`, print.
 
-A project is any directory with a `parts/` folder. No init step. New projects are born double-clickable: `viewer.command` opens the viewer from Finder.
+A project is any directory with a `parts/` folder. No init step. `nurb launcher` writes a double-clickable launcher: `viewer.command` for Finder on macOS or `viewer.desktop` on Linux.
 
 ## How a part works
 
@@ -137,7 +223,7 @@ nurb verify [part]   the doctrine's verification list, --report bundles it with 
 nurb extract         find duplication across parts
 nurb skill           print the agent skill file, --sync rewrites installed copies
 nurb update          upgrade nurb, then re-sync the installed skill to match
-nurb launcher        write viewer.command, a double-clickable `nurb dev`
+nurb launcher        write a double-clickable `nurb dev` launcher for your platform
 ```
 
 Commands that take `[part]` default to every part in the project.
