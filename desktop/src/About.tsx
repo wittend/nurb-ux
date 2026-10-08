@@ -78,8 +78,8 @@ export default function About({
         <div className="about-body">
           <p className="about-links">
             <ExternalLink href="https://nurb.dev">nurb.dev</ExternalLink>
-            <ExternalLink href="https://github.com/Shpigford/nurb">github</ExternalLink>
-            <ExternalLink href="https://github.com/Shpigford/nurb/issues/new/choose">
+            <ExternalLink href="https://github.com/wittend/nurb-ux">github</ExternalLink>
+            <ExternalLink href="https://github.com/wittend/nurb-ux/issues/new/choose">
               report an issue
             </ExternalLink>
             <button className="about-copy" onClick={copyDebugInfo}>
@@ -95,7 +95,7 @@ export default function About({
             Geometry comes from <b>Open CASCADE Technology</b> (OCCT
             {occtVersion ? ` ${occtVersion}` : ""}), reached through build123d (Apache-2.0)
             and the OCP bindings (Apache-2.0). OCCT is licensed under LGPL-2.1 with the Open
-            CASCADE exception. This app does not embed OCCT: first launch installs it into
+            CASCADE exception. Linux packages include OCCT in the CAD wheel bundle. First launch installs it into
             the app's data folder as separate, dynamically linked libraries you can inspect
             or replace, alongside the rest of the CAD engine. Sources for the exact version
             installed: <ExternalLink href={occtSources}>{occtSources}</ExternalLink>
@@ -116,11 +116,12 @@ export default function About({
             <pre>{uvMit}</pre>
           </details>
           <p>
-            Also downloaded at first launch, not shipped in the app: Node.js (MIT), the
+            Linux packages also include standalone CPython (PSF) and the Python dependencies,
+            including trimesh (MIT), watchdog (Apache-2.0), websockets (BSD-3-Clause),
+            and numpy (BSD-3-Clause). Their notices ship with the runtime and wheel bundle.
+            Optional AI setup downloads Node.js (MIT), the
             Claude Code and Codex chat adapters and the Gemini CLI from npm under their
-            publishers' own terms, a standalone CPython (PSF), and nurb's Python dependencies, including trimesh
-            (MIT), watchdog (Apache-2.0), websockets (BSD-3-Clause), and numpy
-            (BSD-3-Clause).
+            publishers' own terms.
           </p>
         </div>
       </div>

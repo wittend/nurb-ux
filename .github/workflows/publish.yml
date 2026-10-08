@@ -27,6 +27,7 @@ concurrency:
 
 jobs:
   publish:
+    if: github.repository == 'Shpigford/nurb'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

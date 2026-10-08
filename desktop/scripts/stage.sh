@@ -17,8 +17,8 @@ mkdir -p "$tauri/resources" "$tauri/binaries"
 
 rm -f "$tauri/resources"/nurb-*.whl
 uv build --wheel --project "$repo" -o "$tauri/resources" >/dev/null 2>&1
-uv pip compile "$repo/pyproject.toml" --universal --python-version 3.13 \
-  --generate-hashes --no-annotate -q -o "$tauri/resources/requirements.lock"
+uv export --project "$repo" --locked --no-dev --no-emit-project \
+  --no-annotate --no-header -q -o "$tauri/resources/requirements.lock"
 cp "$adapter_runtime/package.json" "$tauri/resources/adapter-package.json"
 cp "$adapter_runtime/package-lock.json" "$tauri/resources/adapter-package-lock.json"
 
@@ -61,3 +61,11 @@ for triple in $triples; do
   chmod +x "$out"
   rm -rf "$tmp"
 done
+
+# Linux packages include a relocatable Python runtime and native locked wheels.
+if [ "$(uname -s)" = Linux ]; then
+  uv run --no-project --python 3.13 python "$here/stage-python.py" \
+    --repo "$repo" --resources "$tauri/resources"
+  uv run --no-project --python 3.13 python "$here/stage-sources.py" \
+    --resources "$tauri/resources"
+fi

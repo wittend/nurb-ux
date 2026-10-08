@@ -279,6 +279,7 @@ function App() {
   const [showAbout, setShowAbout] = useState(false);
   const [showAgentsHelp, setShowAgentsHelp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showAiSetup, setShowAiSetup] = useState(false);
   const [showGeminiKey, setShowGeminiKey] = useState(false);
   const geminiKeyResolver = useRef<((key: string | null) => void) | null>(null);
   const [defaultProjectsFolder, setDefaultProjectsFolder] = useState<string | null>(null);
@@ -1310,6 +1311,7 @@ function App() {
           </div>
         </div>
       )}
+      {showAiSetup && <Setup chatOnly onDone={() => { setShowAiSetup(false); refreshAgents().catch(() => {}); }} />}
       {showSettings && (
         <Settings
           folder={projectsFolder ?? defaultProjectsFolder ?? "~/Documents/nurb"}
@@ -1320,6 +1322,7 @@ function App() {
           agentStatusState={agentStatusState}
           signingIn={signingIn}
           onSignIn={signInAgent}
+          onInstallAi={() => { setShowSettings(false); setShowAiSetup(true); }}
           onMoreAgents={() => {
             setShowSettings(false);
             setShowAgentsHelp(true);

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import Logo from "./Logo";
+import { isLinux } from "./platform";
 import { setupReportUrl } from "./setupReport";
 
 type ProvisionEvent =
@@ -12,20 +13,24 @@ type ProvisionEvent =
 // only: no Python, no venv, no npm.
 const STAGE_COPY: Record<string, string> = {
   python: "Getting things ready",
-  deps: "Downloading the CAD engine",
+  deps: "Installing the CAD engine",
   warmup: "Preparing the CAD engine",
   chat: "Setting up the AI assistant",
 };
 
 /// First-launch provisioning screen. Mounts once, starts the install, and
 /// hands the window back the moment the environment is healthy.
-export default function Setup({ onDone }: { onDone: () => void }) {
+export default function Setup({ onDone, chatOnly = false }: { onDone: () => void; chatOnly?: boolean }) {
   const [stage, setStage] = useState<string | null>(null);
   const [line, setLine] = useState("");
   const [error, setError] = useState<string | null>(null);
   const started = useRef(false);
+  const [offerChat, setOfferChat] = useState(false);
+  const [installingChat, setInstallingChat] = useState(chatOnly);
 
-  const start = async () => {
+  const start = async (installChat = chatOnly) => {
+    setOfferChat(false);
+    setInstallingChat(installChat);
     setError(null);
     const channel = new Channel<ProvisionEvent>();
     channel.onmessage = (event) => {
@@ -37,8 +42,9 @@ export default function Setup({ onDone }: { onDone: () => void }) {
       }
     };
     try {
-      await invoke("provision", { onEvent: channel });
-      onDone();
+      await invoke(installChat ? "provision_chat" : "provision", { onEvent: channel });
+      if (!installChat && isLinux && !(await invoke<boolean>("provision_chat_status"))) setOfferChat(true);
+      else onDone();
     } catch (e) {
       setError(String(e));
     }
@@ -79,22 +85,32 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   }, []);
 
   return (
-    <div className="setup" data-tauri-drag-region>
+    <div className={chatOnly ? "setup setup-overlay" : "setup"} data-tauri-drag-region>
       <div className="setup-card">
         <div className="setup-logo">
           <Logo size={40} />
         </div>
         <div className="setup-title">nurb</div>
-        {error ? (
+        {offerChat ? (
+          <>
+            <div className="setup-stage">The CAD engine is ready</div>
+            <div className="setup-note">AI tools are optional and require an internet download. Install them later in Settings.</div>
+            <div className="setup-actions">
+              <button className="setup-retry" onClick={() => start(true)}>download AI tools</button>
+              <button className="setup-retry" onClick={onDone}>continue without AI</button>
+            </div>
+          </>
+        ) : error ? (
           <>
             <div className="setup-error">{error}</div>
             <div className="setup-actions">
-              <button className="setup-retry" onClick={start}>
+              <button className="setup-retry" onClick={() => start(installingChat)}>
                 try again
               </button>
               <button className="setup-retry" onClick={report}>
                 report this
               </button>
+              {installingChat && <button className="setup-retry" onClick={onDone}>continue without AI</button>}
             </div>
           </>
         ) : (
@@ -107,9 +123,8 @@ export default function Setup({ onDone }: { onDone: () => void }) {
             </div>
             <div className="setup-detail">{line}</div>
             <div className="setup-note">
-              First launch downloads the CAD engine and the AI assistant (a few
-              hundred megabytes, one time). Your parts will live in ordinary
-              folders in Documents.
+              Linux packages install the bundled CAD engine locally. Optional AI tools
+              download separately. Your parts live in ordinary folders in Documents.
             </div>
           </>
         )}

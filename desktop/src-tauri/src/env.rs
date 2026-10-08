@@ -157,6 +157,14 @@ impl Paths {
         self.data.join("python")
     }
 
+    pub fn bundled_python_dir(&self) -> PathBuf {
+        self.data.join("python-bundled")
+    }
+
+    pub fn bundled_python(&self) -> PathBuf {
+        self.bundled_python_dir().join("bin/python3")
+    }
+
     pub fn uv_cache(&self) -> PathBuf {
         self.data.join("uv-cache")
     }

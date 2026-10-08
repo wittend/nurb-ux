@@ -1,48 +1,42 @@
-# nurb desktop
+# nurb-ux desktop
 
-A Tauri shell around nurb: project rail, agent chat column, and the live viewer in one window.
+A Tauri shell around nurb: project rail, agent chat, and live viewer in one window.
 
-## Dev setup
+## Linux packages
 
-Rust toolchain, Node 22+, uv, and Xcode command line tools. Then:
+This fork builds native **amd64 (x86_64)** and **arm64 (aarch64)** packages. In GitHub Actions, run **Fork Linux packages** against the desired fork branch. Download `nurb-ux-linux-amd64` or `nurb-ux-linux-arm64` from the completed run. Each artifact contains a `.deb`, `.rpm`, and AppImage. The workflow has read-only repository permissions and does not publish to PyPI, create releases, upload to upstream, or require signing secrets.
 
-```
-npm install
+Both amd64 and arm64 use Ubuntu 22.04 as their build baseline (glibc 2.35). Every package format requires a compatible system glibc; choosing a `.deb` or `.rpm` does not lower that requirement. Debian 12/13 and Ubuntu 22.04/24.04 are candidates for both architectures. These baselines describe the build environment, not compatibility verified on those distributions. Prefer the `.deb` on Debian and Ubuntu, where APT installs the declared desktop libraries and bubblewrap. See the root README for installation commands. Both architectures are built natively, rather than cross-compiling CAD libraries.
+
+Linux packages bundle standalone Python 3.13, this checkout's nurb wheel, the CAD dependency wheel set, and uv. First launch creates the local Python environment from those files without network access. Node and AI adapters remain optional downloads; provider authentication and AI requests need internet access. Modelling, viewing, checks, and exports run locally.
+
+Automatic updates are disabled in this fork. Install newer fork packages manually. The inherited upstream publish workflows are guarded to run only in the upstream repository; use the manual fork workflow here.
+
+## Development and local builds
+
+Install Node 22+, Rust, uv, and the Linux Tauri development libraries:
+
+```sh
+sudo apt-get install build-essential libwebkit2gtk-4.1-dev libxdo-dev \
+  libayatana-appindicator3-dev librsvg2-dev libssl-dev libdbus-1-dev \
+  patchelf pkg-config bubblewrap curl xz-utils
+cd desktop
+npm ci
 npm run tauri dev
 ```
 
-Debug builds run nurb out of this checkout (`uv run --project <repo> nurb dev`) and the ACP adapters through PATH `npx`, so nothing needs provisioning. `cargo test` inside `src-tauri/` needs `scripts/stage.sh` to have run once (the build script wants the uv sidecar); any `tauri dev` or `tauri build` runs it for you.
+Debug builds use the checkout and development tools on PATH. `npm run stage` prepares package resources; building on Linux downloads the architecture's portable Python and wheels at build time. Build native packages on each architecture with:
 
-## Provisioning model
+```sh
+npm run tauri build -- --bundles deb,rpm,appimage --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
 
-Release builds never touch the dev environment. On first launch the app provisions everything into its app data directory (`~/Library/Application Support/dev.nurb.desktop`):
+Packages appear under `src-tauri/target/release/bundle/`. No updater signing key is needed for this command.
 
-- `python/`, `env/`: a managed CPython and a venv holding the bundled nurb wheel plus its hash-pinned lock, installed by the bundled uv sidecar.
-- `node/`, `adapters/`: the pinned Node LTS (downloaded from nodejs.org, checksum-verified), the Claude and Codex ACP adapters, and the official Gemini CLI, installed on the user's machine with `npm ci` from a committed integrity lock. Gemini speaks ACP natively through `--acp`; the app validates its Google AI Studio API key through ACP and stores the key in macOS Keychain, never app preferences. These packages are deliberately not bundled: the Claude Code binary inside `@anthropic-ai/claude-agent-sdk` is all-rights-reserved and must not be redistributed. Cursor and Grok speak ACP natively and are never provisioned at all: the app finds the CLI the vendor's own installer put on the machine (`~/.local/bin/agent`, `~/.grok/bin/grok`, then PATH). Until it exists the agent stays out of the rail; the rail's "need another agent?" help lists the missing ones with their installers.
-- `provisioned.json`: what was installed, compared per component on every launch. A changed wheel payload, Python lock, Node version, or adapter lock redoes only its own component; a broken venv is deleted and rebuilt.
+## Bundled libraries and sources
 
-`scripts/stage.sh` stages the bundle inputs before every build: the nurb wheel from this checkout, a `uv pip compile --universal --generate-hashes` lock, the committed adapter manifest and lock, and the uv binaries for the targets this host builds, both darwin triples on a Mac and the host triple on Linux (skipped once downloaded).
+OCCT is distributed through the OCP wheel as separate dynamically linked libraries. The app includes LGPL-2.1 and the Open CASCADE exception in About. Installed libraries remain in the app data environment, where they can be inspected or replaced. Package resources retain Python runtime notices and wheel license metadata. The generated bundle manifest records the exact runtime and dependency files used by each architecture. Package resources also include the corresponding OCCT and OCP source archives, their build scripts and patches, and a source manifest under `python-sources/`.
 
-Debug-build test overrides, never compiled into release: `NURB_DESKTOP_PROVISIONED=1` makes a debug build use the provisioned environment, and `NURB_DESKTOP_DATA=<dir>` points the whole app (registry, sessions, provisioned env) at a scratch directory.
+OCCT sources: <https://github.com/Open-Cascade-SAS/OCCT>. OCP sources and build tooling: <https://github.com/CadQuery/OCP>. Standalone Python sources and build tooling: <https://github.com/astral-sh/python-build-standalone>. Use the exact versions recorded by the bundle manifest when rebuilding or obtaining corresponding sources. Redistribution requires retaining the applicable licenses, notices, and corresponding sources for the shipped libraries; links alone do not replace those obligations.
 
-## Release
-
-The engine and the app share one version and one release: `uv version X.Y.Z` at the repo root, the matching `version` in `src-tauri/tauri.conf.json` (a test enforces they agree, alongside the skill files), merge, then run `scripts/release.sh`. publish.yml handles PyPI and creates the `vX.Y.Z` release on merge; the script builds the desktop half for Apple silicon and Intel, signed and notarized (credentials from `desktop/.env`, see `.env.example`), verifies each chain (`codesign --verify --deep --strict`, `spctl --assess`, `stapler validate`), uploads `nurb.dmg` for Apple silicon and `nurb-intel.dmg` for Intel Macs plus target-specific updater archives, and refreshes `latest.json` on the rolling `desktop-latest` prerelease that installed apps poll. It refuses to upload twice for one version.
-
-Updates are signed with the key from `tauri signer generate` (path in `.env`; the public key lives in `tauri.conf.json`). Losing that private key means shipped apps can never update again.
-
-Releases run from a Mac with the Developer ID certificate in the keychain, the same way the other Sabotage Media apps ship; there is no CI signing. The script builds `aarch64-apple-darwin` and `x86_64-apple-darwin`.
-
-Linux is the same release, run by GitHub Actions. `.github/workflows/desktop-linux.yml` waits for publish.yml to finish, checks the `vX.Y.Z` release for the packages it is missing, and runs `scripts/release-linux.sh` once per architecture: x86_64 on ubuntu-22.04 so the AppImage asks for the oldest glibc still supported, and aarch64 on ubuntu-24.04-arm. Tauri links against the host's system webview, which is why Linux cannot come off the Mac. It needs the `TAURI_SIGNING_PRIVATE_KEY` repository secret and nothing else, since there is no notarization step. The same script still runs by hand on any Linux machine with the updater key, which is how to repair a half-finished release; the two architectures run one at a time because they merge into the same feed.
-
-Linux has no updater tarball: every package is a self-contained updater artifact. The feed carries three entries per architecture, `linux-<arch>` for the AppImage, `linux-<arch>-deb` for the `.deb` and `linux-<arch>-rpm` for the `.rpm`, because the updater asks for its own package format first and a copy installed from the `.deb` can install neither an AppImage nor an `.rpm`.
-
-The bundler signs the `.deb` and the AppImage where they sit but does not count an `.rpm` as an updater artifact, so `release-linux.sh` signs that one itself with `tauri signer sign`. The `.rpm` names bubblewrap, curl and xz explicitly and leaves the shared libraries to the bundler, which writes them as soname requires (`libwebkit2gtk-4.1.so.0()(64bit)`): sonames are the same on Fedora, RHEL and openSUSE while the package names that carry them are not. Building the `.rpm` needs no rpm tooling on the host, which is why the Ubuntu runners produce it.
-
-`scripts/common.sh` holds what both release scripts do the same way: the version guard, the wait for publish.yml, and the merge into `latest.json`.
-
-Neither script owns `latest.json`. Each merges its own platforms into the published feed through `scripts/feed.py`, so whichever runs second keeps the other's entries and the order the two machines run in does not matter. Entries belonging to a different version are dropped rather than carried forward, because a feed that names a new version while pointing a platform at the old artifact would offer every user on that platform an update that installs the previous build.
-
-Anything that installs a `.deb` or `.rpm` gets a native package; everything else runs the AppImage, which carries its own dependencies and needs no package manager.
-
-Building on Linux needs the Tauri system libraries: `apt install libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev patchelf build-essential libssl-dev pkg-config`. The app itself additionally needs `bubblewrap` at runtime, which the `.deb` declares as a dependency: it is what confines each agent adapter, the way Seatbelt does on macOS.
+To rebuild with a replacement CAD dependency, change the dependency constraints in the root `pyproject.toml`, update `uv.lock` with `uv lock`, restage on the target architecture, and rebuild the package. If the OCP version changes, update the matching source revisions and checksums in `scripts/stage-sources.py`; staging refuses to pair a new OCP wheel with old sources. For an installed environment, replace the wheel/library in that environment using its Python interpreter and an appropriate compatible wheel.

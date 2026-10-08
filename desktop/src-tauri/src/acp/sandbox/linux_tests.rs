@@ -195,7 +195,15 @@ fn the_real_wrapping_admits_the_project_and_agent_state() {
         let script = format!(
             "mkdir -p \"$HOME/{dot}/nurb-bwrap-test\" && rmdir \"$HOME/{dot}/nurb-bwrap-test\""
         );
-        assert!(bwrapped_as(dot, None, &project, &project, &script));
+        // A symlinked or otherwise unsafe HOME deliberately stays read-only.
+        // Hosted runners commonly have ~/.ghcup as a symlink; the test must
+        // verify that fallback rather than expect the sandbox to open HOME.
+        let home_writable = home_args_for(&home, dot).is_ok();
+        assert_eq!(
+            bwrapped_as(dot, None, &project, &project, &script),
+            home_writable,
+            "agent state must follow the validated HOME policy"
+        );
         let other = if dot == ".claude" {
             ".codex"
         } else {
@@ -207,6 +215,44 @@ fn the_real_wrapping_admits_the_project_and_agent_state() {
         }
     }
     std::fs::remove_dir_all(project).ok();
+}
+
+#[test]
+fn synthetic_home_enforces_writable_state_and_symlink_fallback() {
+    let fixture = scratch("bwrap-home-policy");
+    std::fs::create_dir_all(fixture.join(".claude")).unwrap();
+    std::fs::write(fixture.join("notes.txt"), "mine").unwrap();
+    let fixture = fixture.canonicalize().unwrap();
+    let program = which_bwrap().expect("bubblewrap is required for this test");
+    let write = |path: &Path, home_args: Vec<String>| {
+        let filter = UnixSocketFilter::new().unwrap();
+        let mut args = vec!["--seccomp".into(), filter.fd().to_string()];
+        args.extend(
+            ["--ro-bind", "/", "/", "--dev", "/dev", "--die-with-parent"]
+                .into_iter()
+                .map(String::from),
+        );
+        args.extend(home_args);
+        args.extend([
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf state > \"$1\"".into(),
+            "probe".into(),
+            path.to_string_lossy().into_owned(),
+        ]);
+        Command::new(&program).args(args).output().unwrap().status.success()
+    };
+    let state = fixture.join(".claude/state.txt");
+    assert!(write(&state, home_args_for(&fixture, ".claude").unwrap()));
+    assert!(!write(&fixture.join("notes.txt"), home_args_for(&fixture, ".claude").unwrap()));
+    assert_eq!(std::fs::read_to_string(fixture.join("notes.txt")).unwrap(), "mine");
+    // Match hosted runners without changing the real HOME or its environment.
+    std::os::unix::fs::symlink(".claude", fixture.join(".ghcup")).unwrap();
+    assert!(home_args_for(&fixture, ".claude").is_err());
+    let fallback = home_args_for(&fixture, ".claude").unwrap_or_default();
+    assert!(!write(&state, fallback));
+    assert_eq!(std::fs::read_to_string(&state).unwrap(), "state");
+    std::fs::remove_dir_all(fixture).unwrap();
 }
 
 #[test]
@@ -243,28 +289,46 @@ fn agent_state_beside_the_directory_is_writable_too() {
     std::fs::create_dir_all(&project).unwrap();
     let project = project.canonicalize().unwrap();
 
-    assert!(bwrapped(
-        &project,
-        &project,
-        &format!("printf x >> '{}'", probe.display())
-    ));
-    assert!(bwrapped(
-        &project,
-        &project,
-        &format!(
-            "printf y > '{0}.tmp' && mv '{0}.tmp' '{0}'",
-            fresh.display()
-        )
-    ));
-    assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "y");
-    assert!(bwrapped(
-        &project,
-        &project,
-        &format!(
-            "printf z > '{0}.tmp' && mv '{0}.tmp' '{0}'",
-            probe.display()
-        )
-    ));
+    let home_writable = home_args_for(&home, ".claude").is_ok();
+    assert_eq!(
+        bwrapped(
+            &project,
+            &project,
+            &format!("printf x >> '{}'", probe.display())
+        ),
+        home_writable
+    );
+    assert_eq!(
+        bwrapped(
+            &project,
+            &project,
+            &format!(
+                "printf y > '{0}.tmp' && mv '{0}.tmp' '{0}'",
+                fresh.display()
+            )
+        ),
+        home_writable
+    );
+    if home_writable {
+        assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "y");
+    } else {
+        assert!(!fresh.exists(), "read-only HOME must reject new agent state");
+    }
+    assert_eq!(
+        bwrapped(
+            &project,
+            &project,
+            &format!(
+                "printf z > '{0}.tmp' && mv '{0}.tmp' '{0}'",
+                probe.display()
+            )
+        ),
+        home_writable
+    );
+    assert_eq!(
+        std::fs::read_to_string(&probe).unwrap(),
+        if home_writable { "z" } else { "probe" }
+    );
     let unrelated = home.join(format!("nurb-unrelated-{}", std::process::id()));
     std::fs::write(&unrelated, "probe").unwrap();
     assert!(!bwrapped(
